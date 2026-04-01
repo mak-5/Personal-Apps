@@ -21,6 +21,15 @@ const APPS = [
     status: 'live',
   },
   {
+    path: '/returns-tracker',
+    name: 'Returns Tracker',
+    tagline: 'Investment growth · returns · performance',
+    icon: '📈',
+    accent: '#7c6af7',
+    bg: 'linear-gradient(135deg, #0f0c1e 0%, #0c0f1a 100%)',
+    status: 'live',
+  },
+  {
     path: null,
     name: 'PL Simulator',
     tagline: 'Premier League points table',
