@@ -4,3 +4,8 @@ dist
 *.local
 .env
 .env.*
+!.env.example
+!server/.env.example
+server/.env
+__pycache__
+*.pyc

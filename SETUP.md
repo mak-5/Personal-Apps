@@ -109,13 +109,105 @@ That's it. No manual deploy steps ever.
 
 ---
 
-## Adding the Finance PWA
+## Returns Tracker — Investment Dashboard
 
-Your existing Plaid + FastAPI frontend components go in:
+A full-stack investment returns tracker built into the launcher. Tracks portfolio value, cost basis, and computes time-weighted returns using the Modified Dietz method.
+
+### What it does
+
+- **Overview tab** — Six return cards: YTD, 1M, 3M, 6M, prior full year, and All-Time ROIC. Plus an Invested / Current Value / Unrealized Gain strip and a mini annual returns table.
+- **Performance tab** — Period buttons (1M, 3M, 6M, YTD, 1Y, 3Y, 5Y) or custom year/month selector. Shows Modified Dietz return %, APY, and dollar gain. Per-account breakdown for multi-account portfolios.
+- **Chart tab** — Portfolio value vs cost basis line chart over time.
+- **Annual tab** — Year-by-year table: Start Value, Deposits (cash flows), End Value, Return % (Modified Dietz). All-time ROIC footer row.
+- **Data tab** — Account blurbs with current value, last updated date, and a ⚠️ warning if market value hasn't been updated after the last deposit. Record Deposit form (auto-bumps market value by deposit amount). Update Market Value form. Editable snapshot table.
+
+### Return methodology
+
+| Metric | Formula |
+|---|---|
+| **Period return (YTD, 1M, 3M, 6M, annual)** | Modified Dietz: `(EndValue − StartValue − CashFlows) / (StartValue + CashFlows)` |
+| **All-Time ROIC** | `(CurrentValue − TotalDeposited) / TotalDeposited` |
+| **APY** | Annualised from Modified Dietz using period days |
+
+Cash flows are derived automatically from increases in the `cost_basis` column — no separate transactions table needed.
+
+### Data model
+
+One Supabase table: `portfolio_snapshots`
+
+```sql
+create table portfolio_snapshots (
+  id          uuid default gen_random_uuid() primary key,
+  date        date not null,
+  account     text not null default 'Fidelity',
+  value       numeric not null,
+  cost_basis  numeric not null,
+  created_at  timestamptz default now(),
+  unique (date, account)
+);
+alter table portfolio_snapshots enable row level security;
 ```
-src/apps/finance-pwa/FinancePWA.jsx
+
+- `cost_basis` stores the **running total** invested in that account as of that date (not the incremental deposit).
+- `value` stores the market value on that date.
+- A deposit row has an increased `cost_basis`; a market-value-only update carries `cost_basis` forward unchanged.
+- Multiple accounts are stored in the same table, differentiated by the `account` column.
+
+### Architecture
+
 ```
-The routing is already wired. Just replace the placeholder component with your actual app.
+Browser (React / Vite)
+      │  /api/* proxy (dev) → port 8000
+      ▼
+FastAPI (Python) — server/main.py
+      │  httpx  (service key, server-side only)
+      ▼
+Supabase PostgreSQL
+```
+
+### Running locally
+
+**1. Supabase** — create the table above, then copy your keys:
+```bash
+cp server/.env.example server/.env
+# fill in SUPABASE_URL and SUPABASE_SERVICE_KEY
+```
+
+**2. Python backend**
+```bash
+cd server
+pip3 install -r requirements.txt      # first time only
+python3 -m uvicorn main:app --reload --port 8000
+```
+Or use the Claude Code launch config (auto-starts both servers):
+```
+.claude/launch.json  →  "FastAPI Backend"
+```
+
+**3. Vite frontend**
+```bash
+npm run dev        # proxies /api → localhost:8000
+```
+
+Navigate to `http://localhost:5173/returns-tracker`
+
+### API endpoints
+
+| Method | Path | Description |
+|---|---|---|
+| GET | `/api/snapshots` | All rows, ordered by date asc |
+| POST | `/api/snapshots` | Insert a new snapshot |
+| PUT | `/api/snapshots/{id}` | Update value / cost_basis |
+| DELETE | `/api/snapshots/{id}` | Delete a row |
+
+### Troubleshooting
+
+| Problem | Fix |
+|---|---|
+| Backend won't start via launch config | Run manually: `cd server && python3 -m uvicorn main:app --port 8000` |
+| `PermissionError` on uvicorn start | Use Homebrew Python: `/opt/homebrew/bin/uvicorn` with `--loop asyncio --http h11` |
+| Returns show `—` | No cost_basis data yet — add a deposit first |
+| ⚠️ warning on account card | Update market value for that account after the deposit date |
 
 ---
 
@@ -126,8 +218,14 @@ akshay-apps/
 ├── .github/
 │   └── workflows/
 │       └── deploy.yml        ← Auto-deploys on every git push
+├── .claude/
+│   └── launch.json           ← Dev server configs (FastAPI + Vite)
 ├── public/
 │   └── icons/                ← PWA icons (192px + 512px PNGs)
+├── server/                   ← FastAPI backend (not deployed to GitHub Pages)
+│   ├── main.py               ← API endpoints + Supabase integration
+│   ├── requirements.txt
+│   └── .env.example          ← Copy to .env and fill in Supabase keys
 ├── src/
 │   ├── main.jsx              ← Router — add new apps here
 │   ├── Launcher.jsx          ← Home screen / app hub
@@ -135,8 +233,10 @@ akshay-apps/
 │   └── apps/
 │       ├── flight-dashboard/
 │       │   └── FlightDashboard.jsx
-│       └── finance-pwa/
-│           └── FinancePWA.jsx
+│       ├── finance-pwa/
+│       │   └── FinancePWA.jsx
+│       └── returns-tracker/
+│           └── ReturnsTracker.jsx  ← Investment returns dashboard
 ├── index.html
 ├── vite.config.js            ← Change base: '/apps/' if repo name differs
 └── package.json

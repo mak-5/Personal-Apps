@@ -8,6 +8,14 @@ const isNative = process.env.BUILD_TARGET === 'native'
 
 export default defineConfig({
   base: isNative ? './' : '/apps/',
+  server: {
+    proxy: {
+      '/api': {
+        target: 'http://localhost:8000',
+        changeOrigin: true,
+      },
+    },
+  },
   plugins: [
     react(),
     VitePWA({
