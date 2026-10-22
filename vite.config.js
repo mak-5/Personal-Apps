@@ -14,6 +14,16 @@ export default defineConfig({
         target: 'http://localhost:8000',
         changeOrigin: true,
       },
+      '/perm-api': {
+        target: 'https://permtrack.app',
+        changeOrigin: true,
+        rewrite: path => path.replace(/^\/perm-api/, '/api'),
+      },
+      '/flag-api': {
+        target: 'https://flag.dol.gov',
+        changeOrigin: true,
+        rewrite: path => path.replace(/^\/flag-api/, ''),
+      },
     },
   },
   plugins: [

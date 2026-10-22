@@ -118,7 +118,7 @@ const S = {
 
 function fmt$(n) {
   if (n == null || !isFinite(n)) return '—'
-  return '$' + Math.round(n).toLocaleString('en-US')
+  return n.toLocaleString('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 2, maximumFractionDigits: 2 })
 }
 function fmtPct(n) {
   if (n == null || !isFinite(n)) return '—'
@@ -173,153 +173,108 @@ function totalCostAsOf(sorted, asOfDate) {
   return latestCostBasisPerAccount(sorted, asOfDate).reduce((a, e) => a + e.cost_basis, 0)
 }
 
-// ─── Modified Dietz Helpers ───────────────────────────────────────────────────
-// cost_basis is stored as a RUNNING TOTAL per account.
-// An incremental deposit occurs whenever cost_basis increases vs the prior row
-// for the same account. We derive cash flows from those increases.
+// ─── TWR (Time-Weighted Return) Helpers ──────────────────────────────────────
+// cost_basis stored as running total per account.
+// Deposit events = rows where cost_basis increases vs prior row for same account.
+// startDate is EXCLUSIVE (use Dec 31 prior year as baseline); endDate is INCLUSIVE.
 
-// Returns the total incremental deposits that occurred strictly within (startDate, endDate]
-function cashFlowsInPeriod(sorted, startDate, endDate) {
-  const accounts = [...new Set(sorted.map(e => e.account))]
-  let total = 0
-  for (const account of accounts) {
+// Incremental deposit events within (startDate, endDate] for all accounts
+function depositEventsInPeriod(sorted, startDate, endDate) {
+  const events = []
+  for (const account of [...new Set(sorted.map(e => e.account))]) {
     let prevCost = 0
     for (const row of sorted.filter(e => e.account === account)) {
       if (row.cost_basis > prevCost) {
-        // cost_basis increased → this row records a deposit
-        if (row.date > startDate && row.date <= endDate) {
-          total += row.cost_basis - prevCost
-        }
+        if (row.date > startDate && row.date <= endDate)
+          events.push({ date: row.date, amount: row.cost_basis - prevCost, account })
         prevCost = row.cost_basis
       }
-      // cost_basis == prevCost (carried forward) or 0 (value-only row): no new deposit
     }
   }
-  return total
+  return events.sort((a, b) => a.date - b.date)
 }
 
-// Modified Dietz: (EndValue − StartValue − CashFlows) / (StartValue + CashFlows)
-// Returns a percentage (e.g. 50.0 for 50%).  Returns null when there is no basis.
-function modifiedDietz(sorted, startDate, endDate) {
+// True TWR: chains sub-period returns around each cash flow.
+// Uses Dec 31 prior year as baseline (pass startDate = Dec 31 prior year).
+function calcTWR(sorted, startDate, endDate) {
   const startValue = totalValueAsOf(sorted, startDate)
   const endValue   = totalValueAsOf(sorted, endDate)
   if (!endValue) return null
-  const cf  = cashFlowsInPeriod(sorted, startDate, endDate)
-  const den = startValue + cf
-  if (!den) return null
-  return (endValue - startValue - cf) / den * 100
+  const events = depositEventsInPeriod(sorted, startDate, endDate)
+  if (!events.length) {
+    return startValue ? (endValue / startValue - 1) * 100 : null
+  }
+  let factor = 1, prevVal = startValue
+  for (const { date, amount } of events) {
+    const postDeposit = totalValueAsOf(sorted, date)
+    const preDeposit  = postDeposit - amount
+    if (prevVal > 0) factor *= preDeposit / prevVal
+    prevVal = postDeposit
+  }
+  if (prevVal > 0) factor *= endValue / prevVal
+  return (factor - 1) * 100
 }
 
-// Same as modifiedDietz but also returns the component values for display
-function modifiedDietzDetail(sorted, startDate, endDate) {
-  const startValue = totalValueAsOf(sorted, startDate)
-  const endValue   = totalValueAsOf(sorted, endDate)
-  const cf         = cashFlowsInPeriod(sorted, startDate, endDate)
-  const den        = startValue + cf
-  const gain       = endValue - startValue - cf   // pure investment return (excl. new money)
-  const pct        = den ? gain / den * 100 : null
-  return { startValue, endValue, cf, gain, pct }
+// TWR for a single account
+function calcTWRAccount(sorted, account, startDate, endDate) {
+  return calcTWR(sorted.filter(e => e.account === account), startDate, endDate)
 }
 
-// Per-account Modified Dietz for a period
-function modifiedDietzByAccount(sorted, startDate, endDate) {
-  const today = endDate
-  return [...new Set(sorted.map(e => e.account))].map(account => {
-    const acct      = sorted.filter(e => e.account === account)
-    const startVal  = acct.filter(e => e.date <= startDate).reduce((_, r) => r.value, 0)
-    const endVal    = acct.filter(e => e.date <= today).reduce((_, r) => r.value, 0)
-    if (!endVal) return { account, pct: null, apy: null, gain: null, startVal, endVal }
+// Annualise a TWR over the actual period length
+function calcAPY(twrPct, startDate, endDate) {
+  if (twrPct == null || !isFinite(twrPct)) return null
+  const years = (endDate - startDate) / (365.25 * 86400000)
+  if (years < 1 / 365) return null
+  return (Math.pow(1 + twrPct / 100, 1 / years) - 1) * 100
+}
 
-    // Incremental deposits for this account within the period
-    let prevCost = 0, cf = 0
-    for (const row of acct) {
-      if (row.cost_basis > prevCost) {
-        if (row.date > startDate && row.date <= today) cf += row.cost_basis - prevCost
-        prevCost = row.cost_basis
-      }
-    }
-
-    const den        = startVal + cf
-    const gain       = endVal - startVal - cf
-    const pct        = den ? gain / den * 100 : null
-    const periodDays = Math.max(1, (today - startDate) / 86400000)
-    const apy        = (den && endVal / den > 0) ? (Math.pow(endVal / den, 365 / periodDays) - 1) * 100 : null
-    return { account, pct, apy, gain, startVal, endVal, cf }
-  })
+// Canonical year window: Dec 31 prior year → Dec 31 of year (or today)
+function yearWindow(year) {
+  const today = new Date()
+  return {
+    startDate: new Date(year - 1, 11, 31, 23, 59, 59),
+    endDate:   year === today.getFullYear() ? today : new Date(year, 11, 31, 23, 59, 59),
+  }
 }
 
 function calcSummary(sorted) {
   if (!sorted.length) return null
-  const today    = new Date()
-  const totalVal = totalValueAsOf(sorted, today)
-  const totalCost= totalCostAsOf(sorted, today)
+  const today     = new Date()
+  const totalVal  = totalValueAsOf(sorted, today)
+  const totalCost = totalCostAsOf(sorted, today)
 
-  // All-time ROIC: simple (value − total deposited) / total deposited
+  // All-time ROIC
   const roic          = totalCost ? (totalVal - totalCost) / totalCost * 100 : null
   const totalMultiple = totalCost ? totalVal / totalCost : null
 
-  // Modified Dietz for rolling windows and YTD
-  const jan1     = new Date(today.getFullYear(), 0, 1)
-  const ago1m    = new Date(today.getFullYear(), today.getMonth() - 1,  today.getDate())
-  const ago3m    = new Date(today.getFullYear(), today.getMonth() - 3,  today.getDate())
-  const ago6m    = new Date(today.getFullYear(), today.getMonth() - 6,  today.getDate())
-  const ytdPct   = modifiedDietz(sorted, jan1,  today)
-  const mo1Pct   = modifiedDietz(sorted, ago1m, today)
-  const mo3Pct   = modifiedDietz(sorted, ago3m, today)
-  const mo6Pct   = modifiedDietz(sorted, ago6m, today)
+  // YTD TWR + APY (baseline = Dec 31 prior year)
+  const { startDate: ytdStart, endDate: ytdEnd } = yearWindow(today.getFullYear())
+  const ytdTWR = calcTWR(sorted, ytdStart, ytdEnd)
+  const ytdAPY = calcAPY(ytdTWR, ytdStart, ytdEnd)
 
-  // Prior full year Modified Dietz
-  const prevYear      = today.getFullYear() - 1
-  const prevYearStart = new Date(prevYear, 0, 1)
-  const prevYearEnd   = new Date(prevYear, 11, 31, 23, 59, 59)
-  const prevYearPct   = modifiedDietz(sorted, prevYearStart, prevYearEnd)
+  // All-time TWR + APY (baseline = Dec 31 before first data year)
+  const firstYear  = sorted[0].date.getFullYear()
+  const atStart    = new Date(firstYear - 1, 11, 31, 23, 59, 59)
+  const allTimeTWR = calcTWR(sorted, atStart, today)
+  const allTimeAPY = calcAPY(allTimeTWR, atStart, today)
 
-  return {
-    totalVal, totalCost, totalMultiple,
-    roic, ytdPct, mo1Pct, mo3Pct, mo6Pct,
-    prevYear, prevYearPct,
-  }
+  return { totalVal, totalCost, totalMultiple, roic, ytdTWR, ytdAPY, allTimeTWR, allTimeAPY }
 }
 
 function calcAnnualRows(sorted) {
   if (!sorted.length) return []
   const years = [...new Set(sorted.map(e => e.date.getFullYear()))].sort((a, b) => b - a)
-  const today = new Date()
   return years.map(year => {
-    const yearStart = new Date(year, 0, 1)
-    const yearEnd   = year === today.getFullYear() ? today : new Date(year, 11, 31, 23, 59, 59)
-    const { startValue, endValue, cf, gain, pct } = modifiedDietzDetail(sorted, yearStart, yearEnd)
-    return { year, startValue, endValue, cf, gain, pct, isCurrent: year === today.getFullYear() }
+    const { startDate, endDate } = yearWindow(year)
+    const startValue = totalValueAsOf(sorted, startDate)
+    const endValue   = totalValueAsOf(sorted, endDate)
+    const cf         = depositEventsInPeriod(sorted, startDate, endDate)
+                         .reduce((s, e) => s + e.amount, 0)
+    const twr        = calcTWR(sorted, startDate, endDate)
+    const apy        = calcAPY(twr, startDate, endDate)
+    const today      = new Date()
+    return { year, startValue, endValue, cf, twr, apy, isCurrent: year === today.getFullYear() }
   })
-}
-
-function calcPeriodPerf(sorted, startDate) {
-  if (!sorted.length) return null
-  const today = new Date()
-  const { startValue, endValue, cf, gain, pct } = modifiedDietzDetail(sorted, startDate, today)
-  if (!endValue) return null
-  const den        = startValue + cf
-  const periodDays = Math.max(1, (today - startDate) / 86400000)
-  const apy        = (den && endValue / den > 0) ? (Math.pow(endValue / den, 365 / periodDays) - 1) * 100 : null
-  return { periodReturn: pct, apy, gain, startTotal: startValue, currentTotal: endValue, cf, periodDays: Math.round(periodDays) }
-}
-
-function calcPeriodPerfByAccount(sorted, startDate) {
-  return modifiedDietzByAccount(sorted, startDate, new Date())
-}
-
-function getPeriodStartDate(period, customYear, customMonth) {
-  const today = new Date()
-  if (period === '1M')  return new Date(today.getFullYear(), today.getMonth() - 1, today.getDate())
-  if (period === '3M')  return new Date(today.getFullYear(), today.getMonth() - 3, today.getDate())
-  if (period === '6M')  return new Date(today.getFullYear(), today.getMonth() - 6, today.getDate())
-  if (period === 'YTD') return new Date(today.getFullYear(), 0, 1)
-  if (period === '1Y')  return new Date(today.getFullYear() - 1, today.getMonth(), today.getDate())
-  if (period === '3Y')  return new Date(today.getFullYear() - 3, today.getMonth(), today.getDate())
-  if (period === '5Y')  return new Date(today.getFullYear() - 5, today.getMonth(), today.getDate())
-  const y = parseInt(customYear)
-  const m = customMonth ? parseInt(customMonth) - 1 : 0
-  return new Date(y, m, 1)
 }
 
 function buildChartPoints(sorted) {
@@ -375,12 +330,12 @@ function StatCard({ label, value, sub, color }) {
   )
 }
 
-function SkeletonRow() {
+function SkeletonRow({ cols = 6 }) {
   return (
     <tr>
-      {[1,2,3,4,5].map(i => (
+      {Array.from({ length: cols }).map((_, i) => (
         <td key={i} style={{ ...S.td, padding: '12px 14px' }}>
-          <div style={{ height: '10px', borderRadius: '4px', background: '#1e1e2e', width: i === 1 ? '60px' : '80px' }} />
+          <div style={{ height: '10px', borderRadius: '4px', background: '#1e1e2e', width: i === 0 ? '60px' : '80px' }} />
         </td>
       ))}
     </tr>
@@ -413,10 +368,7 @@ export default function ReturnsTracker() {
   const [dbError, setDbError]       = useState('')
 
   const [tab, setTab]               = useState('overview')
-  const [perfPeriod, setPerfPeriod] = useState('YTD')
-  const [customYear, setCustomYear] = useState('2026')
-  const [customMonth, setCustomMonth] = useState('')
-  const [isCustom, setIsCustom]     = useState(false)
+  const [blurbYear, setBlurbYear]   = useState(new Date().getFullYear() - 1) // year selector in blurbs
 
   // Record Deposit form
   const [depDate, setDepDate]       = useState(todayStr())
@@ -492,76 +444,99 @@ export default function ReturnsTracker() {
   }
 
   // ── Derived Data ───────────────────────────────────────────────────────────
-  const sortedData    = useMemo(() => [...rawData].sort((a, b) => a.date - b.date), [rawData])
-  const summary       = useMemo(() => calcSummary(sortedData), [sortedData])
-  const annualRows    = useMemo(() => calcAnnualRows(sortedData), [sortedData])
-  const chartPoints   = useMemo(() => buildChartPoints(sortedData), [sortedData])
-  const accounts      = useMemo(() => [...new Set(sortedData.map(e => e.account))], [sortedData])
+  const sortedData = useMemo(() => [...rawData].sort((a, b) => a.date - b.date), [rawData])
+  const summary    = useMemo(() => calcSummary(sortedData), [sortedData])
+  const annualRows = useMemo(() => calcAnnualRows(sortedData), [sortedData])
+  const chartPoints= useMemo(() => buildChartPoints(sortedData), [sortedData])
+  const accounts   = useMemo(() => [...new Set(sortedData.map(e => e.account))], [sortedData])
 
-  const perfStartDate = useMemo(() => {
-    if (isCustom) return getPeriodStartDate(null, customYear, customMonth)
-    return getPeriodStartDate(perfPeriod)
-  }, [perfPeriod, isCustom, customYear, customMonth])
+  // All years that have data (for year selector)
+  const dataYears  = useMemo(() =>
+    [...new Set(sortedData.map(e => e.date.getFullYear()))].sort((a, b) => b - a)
+  , [sortedData])
 
-  const perfTotal     = useMemo(() => calcPeriodPerf(sortedData, perfStartDate), [sortedData, perfStartDate])
-  const perfByAccount = useMemo(() => calcPeriodPerfByAccount(sortedData, perfStartDate), [sortedData, perfStartDate])
-
-  const availableYears = useMemo(() => {
-    const y = new Date().getFullYear()
-    return Array.from({ length: y - 2025 }, (_, i) => 2026 + i)
-  }, [])
-
-  const hasData = sortedData.length > 0
+  const hasData      = sortedData.length > 0
   const multiAccount = accounts.length > 1
 
-  // Per-account status for blurbs (last value, last deposit, stale warning)
-  const accountStatus = useMemo(() => accounts.map(account => {
-    const rows = sortedData.filter(e => e.account === account)
-    const lastValueRow = [...rows].reverse().find(e => e.value > 0)
-    const lastValue     = lastValueRow?.value ?? 0
-    const lastValueDate = lastValueRow?.date ?? null
-    // Detect deposit events: cost_basis increases vs previous row for same account
-    let prevCost = 0, lastDepositDate = null
-    for (const row of rows) {
-      if (row.cost_basis > prevCost) { lastDepositDate = row.date; prevCost = row.cost_basis }
-    }
-    const stale = lastDepositDate && lastValueDate && lastValueDate < lastDepositDate
-    return { account, lastValue, lastValueDate, lastDepositDate, stale }
-  }), [sortedData, accounts])
+  // Per-account blurb data: ROIC, current-year TWR/APY, selected-year TWR/APY, stale flag
+  const accountStatus = useMemo(() => {
+    const today    = new Date()
+    const curYear  = today.getFullYear()
+    const { startDate: curStart, endDate: curEnd } = yearWindow(curYear)
+    const { startDate: selStart, endDate: selEnd } = yearWindow(blurbYear)
+
+    return accounts.map(account => {
+      const rows         = sortedData.filter(e => e.account === account)
+      const lastValueRow = [...rows].reverse().find(e => e.value > 0)
+      const lastValue    = lastValueRow?.value ?? 0
+      const lastValueDate= lastValueRow?.date ?? null
+      let prevCost = 0, lastDepositDate = null, totalCost = 0
+      for (const row of rows) {
+        if (row.cost_basis > prevCost) { lastDepositDate = row.date; prevCost = row.cost_basis }
+      }
+      totalCost = prevCost
+      const roic  = totalCost ? (lastValue - totalCost) / totalCost * 100 : null
+      const stale = lastDepositDate && lastValueDate && lastValueDate < lastDepositDate
+
+      const curTWR = calcTWRAccount(sortedData, account, curStart, curEnd)
+      const curAPY = calcAPY(curTWR, curStart, curEnd)
+      const selTWR = calcTWRAccount(sortedData, account, selStart, selEnd)
+      const selAPY = calcAPY(selTWR, selStart, selEnd)
+
+      return { account, lastValue, lastValueDate, lastDepositDate, stale, roic, curTWR, curAPY, selTWR, selAPY }
+    })
+  }, [sortedData, accounts, blurbYear])
 
   // ── Handlers ───────────────────────────────────────────────────────────────
 
   // Record a deposit: bumps cost_basis AND market value by the deposit amount
+  // Returns the running cost_basis and last known value for an account
+  // as of a specific date — so back-dated entries use the correct prior baseline.
+  function acctStateAsOf(account, asOfDateStr) {
+    const asOf = new Date(asOfDateStr + 'T00:00:00')
+    const rows  = sortedData.filter(e => e.account === account && e.date <= asOf)
+    let prevCost = 0
+    for (const row of rows) { if (row.cost_basis > prevCost) prevCost = row.cost_basis }
+    const lastVal = [...rows].reverse().find(e => e.value > 0)?.value ?? 0
+    return { prevCost, lastVal }
+  }
+
   async function handleRecordDeposit() {
     if (!depAccount || !depAmount || !depDate) return
     setDepSaving(true)
     setDbError('')
     try {
-      const amount  = parseFloat(depAmount)
-      const rows    = sortedData.filter(e => e.account === depAccount)
-      const lastVal = [...rows].reverse().find(e => e.value > 0)?.value ?? 0
-      let prevCost = 0
-      for (const row of rows) { if (row.cost_basis > prevCost) prevCost = row.cost_basis }
+      const amount                = parseFloat(depAmount)
+      const { prevCost, lastVal } = acctStateAsOf(depAccount, depDate)
+      const depDateObj            = new Date(depDate + 'T00:00:00')
+
+      // Insert the new deposit row
       await apiPost('/api/snapshots', {
         date: depDate, account: depAccount,
         value: lastVal + amount,
         cost_basis: prevCost + amount,
       })
+
+      // Cascade: all rows AFTER this date for the same account need their
+      // cost_basis bumped by the same amount so the running total stays correct
+      const rowsAfter = sortedData.filter(e => e.account === depAccount && e.date > depDateObj)
+      await Promise.all(rowsAfter.map(row =>
+        apiPut(row.id, { value: row.value, cost_basis: row.cost_basis + amount })
+      ))
+
       setDepAmount('')
       await fetchAll()
     } catch (e) { setDbError(e.message) }
     finally { setDepSaving(false) }
   }
 
-  // Update market value only (cost_basis carries forward unchanged)
+  // Update market value only (cost_basis carries forward from the correct prior date)
   async function handleUpdateMarketValue() {
     if (!mvAccount || !mvValue || !mvDate) return
     setMvSaving(true)
     setDbError('')
     try {
-      const rows = sortedData.filter(e => e.account === mvAccount)
-      let prevCost = 0
-      for (const row of rows) { if (row.cost_basis > prevCost) prevCost = row.cost_basis }
+      const { prevCost } = acctStateAsOf(mvAccount, mvDate)
       await apiPost('/api/snapshots', {
         date: mvDate, account: mvAccount,
         value: parseFloat(mvValue), cost_basis: prevCost,
@@ -653,7 +628,7 @@ export default function ReturnsTracker() {
 
       {/* Tabs */}
       <div style={{ display: 'flex', borderBottom: '1px solid #1e1e2e', marginBottom: '24px', overflowX: 'auto' }}>
-        {['overview', 'performance', 'chart', 'annual', 'data'].map(t => (
+        {['overview', 'chart', 'annual', 'data'].map(t => (
           <button key={t} style={S.tab(tab === t)} onClick={() => setTab(t)}>
             {t.charAt(0).toUpperCase() + t.slice(1)}
           </button>
@@ -668,14 +643,13 @@ export default function ReturnsTracker() {
           </div>
         ) : !hasData ? <EmptyState onGoToData={() => setTab('data')} /> : (
           <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
-            {/* Rolling returns grid */}
+            {/* Returns grid */}
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: '10px' }}>
-              <StatCard label="YTD" value={fmtPct(summary?.ytdPct)} color={returnColor(summary?.ytdPct)} />
-              <StatCard label="1M" value={fmtPct(summary?.mo1Pct)} color={returnColor(summary?.mo1Pct)} />
-              <StatCard label="3M" value={fmtPct(summary?.mo3Pct)} color={returnColor(summary?.mo3Pct)} />
-              <StatCard label="6M" value={fmtPct(summary?.mo6Pct)} color={returnColor(summary?.mo6Pct)} />
-              <StatCard label={summary?.prevYear ? String(summary.prevYear) : 'Prior Year'} value={fmtPct(summary?.prevYearPct)} color={returnColor(summary?.prevYearPct)} />
+              <StatCard label="YTD TWR" value={fmtPct(summary?.ytdTWR)} color={returnColor(summary?.ytdTWR)} />
+              <StatCard label="YTD APY" value={fmtPct(summary?.ytdAPY)} color={returnColor(summary?.ytdAPY)} />
               <StatCard label="All-Time ROIC" value={fmtPct(summary?.roic)} sub={fmtMult(summary?.totalMultiple)} color={returnColor(summary?.roic)} />
+              <StatCard label="All-Time TWR" value={fmtPct(summary?.allTimeTWR)} color={returnColor(summary?.allTimeTWR)} />
+              <StatCard label="All-Time APY" value={fmtPct(summary?.allTimeAPY)} color={returnColor(summary?.allTimeAPY)} />
             </div>
 
             <div style={{ ...S.card, display: 'flex', gap: '0', overflow: 'hidden', padding: 0 }}>
@@ -719,98 +693,6 @@ export default function ReturnsTracker() {
         )
       )}
 
-      {/* ── Performance ── */}
-      {tab === 'performance' && (
-        !hasData ? <EmptyState onGoToData={() => setTab('data')} /> : (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
-            <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
-              {['1M','3M','6M','YTD','1Y','3Y','5Y'].map(p => (
-                <button key={p} style={S.periodBtn(!isCustom && perfPeriod === p)} onClick={() => { setPerfPeriod(p); setIsCustom(false) }}>{p}</button>
-              ))}
-            </div>
-
-            <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
-              <span style={{ fontSize: '11px', color: '#555' }}>Custom from:</span>
-              <select value={customYear} onChange={e => { setCustomYear(e.target.value); setIsCustom(true) }} style={{ ...S.input, width: 'auto', padding: '5px 10px' }}>
-                {availableYears.map(y => <option key={y} value={y}>{y}</option>)}
-              </select>
-              <select value={customMonth} onChange={e => { setCustomMonth(e.target.value); setIsCustom(true) }} style={{ ...S.input, width: 'auto', padding: '5px 10px' }}>
-                <option value="">Full year</option>
-                {MONTHS_SHORT.map((m, i) => <option key={i} value={i + 1}>{m}</option>)}
-              </select>
-              {isCustom && <span style={{ fontSize: '11px', color: '#555' }}>From {MONTHS_SHORT[customMonth ? parseInt(customMonth) - 1 : 0]} {customYear} → Today</span>}
-            </div>
-
-            {perfTotal ? (
-              <div style={S.card}>
-                <div style={{ fontSize: '11px', color: '#555', textTransform: 'uppercase', letterSpacing: '1px', marginBottom: '16px' }}>
-                  Total Portfolio · {perfTotal.periodDays} days
-                </div>
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: '0', overflow: 'hidden', borderRadius: '8px', border: '1px solid #1e1e2e' }}>
-                  {[
-                    { label: 'Return', val: fmtPct(perfTotal.periodReturn), color: returnColor(perfTotal.periodReturn) },
-                    { label: 'APY', val: fmtPct(perfTotal.apy), color: returnColor(perfTotal.apy) },
-                    { label: '$ Gain', val: fmt$(perfTotal.gain), color: returnColor(perfTotal.gain) },
-                  ].map((item, i) => (
-                    <div key={i} style={{ textAlign: 'center', padding: '16px 8px', borderRight: i < 2 ? '1px solid #1e1e2e' : 'none', background: '#0f0f18' }}>
-                      <div style={{ fontSize: '20px', fontFamily: "'Syne',sans-serif", fontWeight: 800, color: item.color }}>{item.val}</div>
-                      <div style={{ fontSize: '10px', color: '#444', marginTop: '4px', textTransform: 'uppercase', letterSpacing: '0.8px' }}>{item.label}</div>
-                    </div>
-                  ))}
-                </div>
-                <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '12px', fontSize: '11px', color: '#555' }}>
-                  <span>Start: {fmt$(perfTotal.startTotal)}</span>
-                  <span>Now: {fmt$(perfTotal.currentTotal)}</span>
-                </div>
-              </div>
-            ) : (
-              <div style={{ ...S.card, color: '#555', fontSize: '12px', textAlign: 'center' }}>No data available for this period</div>
-            )}
-
-            {summary && (
-              <div style={S.card}>
-                <div style={{ fontSize: '11px', color: '#555', textTransform: 'uppercase', letterSpacing: '1px', marginBottom: '14px' }}>Return on Invested Money (all-time)</div>
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: '12px', textAlign: 'center' }}>
-                  {[
-                    { label: 'Multiple', val: fmtMult(summary.totalMultiple), color: PURPLE },
-                    { label: 'All-Time ROIC', val: fmtPct(summary.roic), color: returnColor(summary.roic) },
-                    { label: 'Unrealized', val: fmt$(summary.totalVal - summary.totalCost), color: returnColor(summary.roic) },
-                  ].map((item, i) => (
-                    <div key={i}>
-                      <div style={{ fontSize: '18px', fontFamily: "'Syne',sans-serif", fontWeight: 800, color: item.color }}>{item.val}</div>
-                      <div style={{ fontSize: '10px', color: '#444', marginTop: '4px', textTransform: 'uppercase', letterSpacing: '0.8px' }}>{item.label}</div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            {multiAccount && (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-                <div style={{ fontSize: '11px', color: '#555', textTransform: 'uppercase', letterSpacing: '1px' }}>By Account</div>
-                {perfByAccount.map(acct => (
-                  <div key={acct.account} style={{ ...S.card, display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap' }}>
-                    <div style={{ fontFamily: "'Syne',sans-serif", fontWeight: 800, fontSize: '13px', minWidth: '90px' }}>{acct.account}</div>
-                    <div style={{ flex: 1, display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: '8px', textAlign: 'center' }}>
-                      {[
-                        { label: 'Return (MD)', val: fmtPct(acct.pct), color: returnColor(acct.pct) },
-                        { label: 'APY', val: fmtPct(acct.apy), color: returnColor(acct.apy) },
-                        { label: 'Gain', val: fmt$(acct.gain), color: returnColor(acct.gain) },
-                      ].map((item, i) => (
-                        <div key={i}>
-                          <div style={{ fontSize: '14px', fontWeight: 700, color: item.color }}>{item.val}</div>
-                          <div style={{ fontSize: '9px', color: '#444', textTransform: 'uppercase' }}>{item.label}</div>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-        )
-      )}
-
       {/* ── Chart ── */}
       {tab === 'chart' && (
         !hasData ? <EmptyState onGoToData={() => setTab('data')} /> : (
@@ -847,19 +729,21 @@ export default function ReturnsTracker() {
               <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: '380px' }}>
                 <thead><tr>
                   <th style={S.thLeft}>Year</th>
-                  <th style={S.th}>Start</th>
+                  <th style={S.th}>Start (Dec 31)</th>
                   <th style={S.th}>Deposits</th>
                   <th style={S.th}>End Value</th>
-                  <th style={S.th}>Return (MD)</th>
+                  <th style={S.th}>TWR</th>
+                  <th style={S.th}>APY</th>
                 </tr></thead>
                 <tbody>
-                  {loading ? [1,2,3].map(i => <SkeletonRow key={i} />) : annualRows.map(row => (
+                  {loading ? [1,2,3].map(i => <SkeletonRow key={i} cols={6} />) : annualRows.map(row => (
                     <tr key={row.year}>
                       <td style={S.tdLeft}>{row.year}{row.isCurrent ? <span style={{ color: '#444', fontSize: '10px' }}> YTD</span> : ''}</td>
                       <td style={S.td}>{fmt$(row.startValue)}</td>
                       <td style={S.td}>{fmt$(row.cf)}</td>
                       <td style={S.td}>{fmt$(row.endValue)}</td>
-                      <td style={{ ...S.td, color: returnColor(row.pct), fontFamily: "'Syne',sans-serif", fontWeight: 800 }}>{fmtPct(row.pct)}</td>
+                      <td style={{ ...S.td, color: returnColor(row.twr), fontFamily: "'Syne',sans-serif", fontWeight: 800 }}>{fmtPct(row.twr)}</td>
+                      <td style={{ ...S.td, color: returnColor(row.apy) }}>{fmtPct(row.apy)}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -867,14 +751,14 @@ export default function ReturnsTracker() {
                   const now     = new Date()
                   const totCost = totalCostAsOf(sortedData, now)
                   const totVal  = totalValueAsOf(sortedData, now)
-                  const gain    = totVal - totCost
-                  const pct     = totCost ? gain / totCost * 100 : null   // ROIC (all-time)
+                  const roic    = totCost ? (totVal - totCost) / totCost * 100 : null
                   return (
                     <tfoot><tr style={{ background: '#0a0a12' }}>
                       <td style={{ ...S.tdLeft, borderTop: '1px solid #2a2a3a', color: '#888', fontWeight: 500 }}>All-time ROIC</td>
                       <td style={{ ...S.td, borderTop: '1px solid #2a2a3a', color: '#888' }} colSpan={2}>{fmt$(totCost)} invested</td>
                       <td style={{ ...S.td, borderTop: '1px solid #2a2a3a', color: '#888' }}>{fmt$(totVal)}</td>
-                      <td style={{ ...S.td, borderTop: '1px solid #2a2a3a', color: returnColor(pct), fontFamily: "'Syne',sans-serif", fontWeight: 800 }}>{fmtPct(pct)}</td>
+                      <td style={{ ...S.td, borderTop: '1px solid #2a2a3a', color: returnColor(roic), fontFamily: "'Syne',sans-serif", fontWeight: 800 }}>{fmtPct(roic)}</td>
+                      <td style={{ ...S.td, borderTop: '1px solid #2a2a3a', color: returnColor(summary?.allTimeAPY) }}>{fmtPct(summary?.allTimeAPY)}</td>
                     </tr></tfoot>
                   )
                 })()}
@@ -890,25 +774,55 @@ export default function ReturnsTracker() {
 
           {/* ── Account blurbs ── */}
           {accountStatus.length > 0 && (
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))', gap: '10px' }}>
-              {accountStatus.map(({ account, lastValue, lastValueDate, lastDepositDate, stale }) => (
-                <div key={account} style={{ ...S.card, position: 'relative', borderColor: stale ? '#f8717144' : '#1e1e2e' }}>
-                  {stale && (
-                    <div style={{ position: 'absolute', top: '10px', right: '12px', fontSize: '14px' }} title="Market value not updated since last deposit">⚠️</div>
-                  )}
-                  <div style={{ fontSize: '11px', color: '#555', textTransform: 'uppercase', letterSpacing: '1px', marginBottom: '8px' }}>{account}</div>
-                  <div style={{ fontSize: '22px', fontFamily: "'Syne',sans-serif", fontWeight: 800, color: PURPLE }}>{fmt$(lastValue)}</div>
-                  <div style={{ fontSize: '10px', color: '#444', marginTop: '6px' }}>
-                    Value updated: <span style={{ color: '#666' }}>{lastValueDate ? lastValueDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : '—'}</span>
-                  </div>
-                  {lastDepositDate && (
-                    <div style={{ fontSize: '10px', color: stale ? '#f87171aa' : '#444', marginTop: '2px' }}>
-                      Last deposit: <span style={{ color: stale ? '#f87171' : '#666' }}>{lastDepositDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}</span>
-                      {stale && <span style={{ marginLeft: '4px', color: '#f87171', fontSize: '9px' }}>· update needed</span>}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+              {/* Year selector for the blurbs */}
+              <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                <span style={{ fontSize: '10px', color: '#555', textTransform: 'uppercase', letterSpacing: '0.8px' }}>Compare year:</span>
+                <select
+                  value={blurbYear}
+                  onChange={e => setBlurbYear(Number(e.target.value))}
+                  style={{ ...S.input, width: 'auto', padding: '4px 10px', fontSize: '11px' }}
+                >
+                  {dataYears.filter(y => y !== new Date().getFullYear()).map(y => (
+                    <option key={y} value={y}>{y}</option>
+                  ))}
+                </select>
+              </div>
+
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))', gap: '10px' }}>
+                {accountStatus.map(({ account, lastValue, lastValueDate, lastDepositDate, stale, roic, curTWR, curAPY, selTWR, selAPY }) => {
+                  const curYear = new Date().getFullYear()
+                  return (
+                    <div key={account} style={{ ...S.card, position: 'relative', borderColor: stale ? '#f8717144' : '#1e1e2e' }}>
+                      {stale && <div style={{ position: 'absolute', top: '10px', right: '12px', fontSize: '14px' }} title="Market value not updated since last deposit">⚠️</div>}
+
+                      {/* Account name + current value */}
+                      <div style={{ fontSize: '11px', color: '#555', textTransform: 'uppercase', letterSpacing: '1px', marginBottom: '4px' }}>{account}</div>
+                      <div style={{ fontSize: '22px', fontFamily: "'Syne',sans-serif", fontWeight: 800, color: PURPLE, marginBottom: '2px' }}>{fmt$(lastValue)}</div>
+                      <div style={{ fontSize: '10px', color: '#444', marginBottom: '12px' }}>
+                        Updated: <span style={{ color: '#666' }}>{lastValueDate ? lastValueDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : '—'}</span>
+                        {lastDepositDate && <span style={{ color: stale ? '#f87171' : '#555' }}> · deposit {lastDepositDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}{stale ? ' ⚠' : ''}</span>}
+                      </div>
+
+                      {/* Metrics grid */}
+                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '6px', textAlign: 'center' }}>
+                        {[
+                          { label: 'ROIC', val: fmtPct(roic), color: returnColor(roic) },
+                          { label: `${curYear} TWR`, val: fmtPct(curTWR), color: returnColor(curTWR) },
+                          { label: `${curYear} APY`, val: fmtPct(curAPY), color: returnColor(curAPY) },
+                          { label: `${blurbYear} TWR`, val: fmtPct(selTWR), color: returnColor(selTWR) },
+                          { label: `${blurbYear} APY`, val: fmtPct(selAPY), color: returnColor(selAPY) },
+                        ].map((m, i) => (
+                          <div key={i} style={{ background: '#0f0f18', borderRadius: '6px', padding: '8px 4px' }}>
+                            <div style={{ fontSize: '13px', fontFamily: "'Syne',sans-serif", fontWeight: 800, color: m.color }}>{m.val}</div>
+                            <div style={{ fontSize: '9px', color: '#444', marginTop: '3px', textTransform: 'uppercase', letterSpacing: '0.6px' }}>{m.label}</div>
+                          </div>
+                        ))}
+                      </div>
                     </div>
-                  )}
-                </div>
-              ))}
+                  )
+                })}
+              </div>
             </div>
           )}
 
@@ -942,13 +856,14 @@ export default function ReturnsTracker() {
                 {depSaving ? '…' : 'Save'}
               </button>
             </div>
-            {depAccount && depAmount && (() => {
-              const rows   = sortedData.filter(e => e.account === depAccount)
-              const lastVal = [...rows].reverse().find(e => e.value > 0)?.value ?? 0
-              const amt     = parseFloat(depAmount) || 0
+            {depAccount && depAmount && depDate && (() => {
+              const { prevCost, lastVal } = acctStateAsOf(depAccount, depDate)
+              const amt = parseFloat(depAmount) || 0
               return amt > 0 ? (
                 <div style={{ fontSize: '10px', color: '#555', marginTop: '10px' }}>
-                  New market value for <span style={{ color: '#888' }}>{depAccount}</span>: {fmt$(lastVal)} + {fmt$(amt)} = <span style={{ color: GREEN }}>{fmt$(lastVal + amt)}</span>
+                  <span style={{ color: '#888' }}>{depAccount}</span> as of {depDate}:&nbsp;
+                  value {fmt$(lastVal)} + {fmt$(amt)} = <span style={{ color: GREEN }}>{fmt$(lastVal + amt)}</span>
+                  &nbsp;·&nbsp;cost basis {fmt$(prevCost)} + {fmt$(amt)} = <span style={{ color: '#aaa' }}>{fmt$(prevCost + amt)}</span>
                 </div>
               ) : null
             })()}
@@ -1027,7 +942,7 @@ export default function ReturnsTracker() {
                     </tr>
                   )}
 
-                  {loading ? [1,2,3].map(i => <SkeletonRow key={i} />) : [...sortedData].reverse().map(row => (
+                  {loading ? [1,2,3].map(i => <SkeletonRow key={i} cols={5} />) : [...sortedData].reverse().map(row => (
                     <>
                       {editingId === row.id ? (
                         <tr key={row.id} style={{ background: PURPLE + '11' }}>

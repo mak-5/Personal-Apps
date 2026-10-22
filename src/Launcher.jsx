@@ -30,6 +30,15 @@ const APPS = [
     status: 'live',
   },
   {
+    path: '/permit-tracker',
+    name: 'PermTrack',
+    tagline: 'PERM Jan 2026 · DOL backlog · daily decisions',
+    icon: '📋',
+    accent: '#00c4ff',
+    bg: 'linear-gradient(135deg, #060d14 0%, #080e18 100%)',
+    status: 'live',
+  },
+  {
     path: null,
     name: 'PL Simulator',
     tagline: 'Premier League points table',
