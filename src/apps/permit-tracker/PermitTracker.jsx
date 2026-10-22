@@ -221,13 +221,22 @@ export default function PermitTracker() {
   const startScan = useCallback(async () => {
     abortRef.current = false
     setScanning(true)
-    setScanProgress({ done: 0, total: ALL_CASES.length, errors: 0 })
 
-    const caseNumbers = ALL_CASES.map(r => r.c)
+    // Carry forward all previously-resolved cases; only re-query analyst_review ones
+    const prevCache = loadCache()
+    const prevMap = prevCache?.statusMap ?? {}
+    const statusMap = { ...prevMap }
+
+    const pending = ALL_CASES.map(r => r.c).filter(cn => {
+      const prev = prevMap[cn]
+      return !prev || prev === 'analyst_review'
+    })
+
+    setScanProgress({ done: 0, total: pending.length, errors: 0, skipped: ALL_CASES.length - pending.length })
+
     const batches = []
-    for (let i = 0; i < caseNumbers.length; i += 30) batches.push(caseNumbers.slice(i, i + 30))
+    for (let i = 0; i < pending.length; i += 30) batches.push(pending.slice(i, i + 30))
 
-    const statusMap = {}
     let done = 0
     let errors = 0
     const queue = [...batches]
@@ -245,15 +254,14 @@ export default function PermitTracker() {
           })
           batch.forEach(cn => {
             const rawStatus = foundMap[cn]
-            // not found in FLAG = still pending
             statusMap[cn] = rawStatus ? classifyStatus(rawStatus) : 'analyst_review'
           })
         } catch {
           errors++
-          batch.forEach(cn => { statusMap[cn] = 'other' })
+          batch.forEach(cn => { statusMap[cn] = 'analyst_review' })
         }
         done += batch.length
-        setScanProgress({ done, total: caseNumbers.length, errors })
+        setScanProgress({ done, total: pending.length, errors, skipped: ALL_CASES.length - pending.length })
       }
     })
 
@@ -314,7 +322,7 @@ export default function PermitTracker() {
       {scanning && scanProgress && (
         <div style={{ marginBottom: '24px' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '11px', color: '#3a5a7a', marginBottom: '6px' }}>
-            <span>Querying FLAG… {scanProgress.done.toLocaleString()} / {scanProgress.total.toLocaleString()}</span>
+            <span>Querying FLAG… {scanProgress.done.toLocaleString()} / {scanProgress.total.toLocaleString()} pending{scanProgress.skipped > 0 ? ` · ${scanProgress.skipped.toLocaleString()} skipped` : ''}</span>
             <span>{progress}%{scanProgress.errors > 0 ? ` · ${scanProgress.errors} errors` : ''}</span>
           </div>
           <div style={{ height: '3px', background: '#0e1a26', borderRadius: '2px' }}>
