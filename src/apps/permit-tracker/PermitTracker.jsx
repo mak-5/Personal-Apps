@@ -115,9 +115,16 @@ function Bar({ row }) {
 const TD = { padding: '8px 14px', borderBottom: '1px solid #0e1a26', fontSize: '12px', fontFamily: "'DM Mono', monospace" }
 const TH = { padding: '8px 14px', borderBottom: '1px solid #1a2a3a', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '1.5px', color: '#4a6a8a', fontFamily: "'DM Mono', monospace", background: '#070f18' }
 
-function StatsTable({ title, rows, nameLabel = 'Name', maxRows = null }) {
+function DeltaCell({ delta }) {
+  if (delta == null || delta === 0) return <td style={{ ...TD, textAlign: 'right', color: '#333' }}>—</td>
+  const color = delta > 0 ? '#00e676' : '#ff4444'
+  return <td style={{ ...TD, textAlign: 'right', color, fontWeight: 600 }}>{delta > 0 ? `+${delta}` : delta}</td>
+}
+
+function StatsTable({ title, rows, nameLabel = 'Name', maxRows = null, prevRows = null }) {
   const [expanded, setExpanded] = useState(false)
   const display = maxRows && !expanded ? rows.slice(0, maxRows) : rows
+  const prevMap = prevRows ? new Map(prevRows) : null
 
   return (
     <div style={{ marginBottom: '32px' }}>
@@ -131,6 +138,7 @@ function StatsTable({ title, rows, nameLabel = 'Name', maxRows = null }) {
               <th style={{ ...TH, textAlign: 'left' }}>{nameLabel}</th>
               <th style={{ ...TH, textAlign: 'right' }}>Total</th>
               <th style={{ ...TH, textAlign: 'right', color: '#00c47a' }}>Certified</th>
+              {prevMap && <th style={{ ...TH, textAlign: 'right', color: '#00e676' }}>Δ</th>}
               <th style={{ ...TH, textAlign: 'right' }}>Analyst Review</th>
               <th style={{ ...TH, textAlign: 'right', color: '#ff9800' }}>Other</th>
               <th style={{ ...TH, textAlign: 'right', color: ACCENT }}>% Remaining</th>
@@ -138,21 +146,26 @@ function StatsTable({ title, rows, nameLabel = 'Name', maxRows = null }) {
             </tr>
           </thead>
           <tbody>
-            {display.map(([key, row]) => (
-              <tr key={key}
-                style={{ background: 'transparent', transition: 'background 0.1s' }}
-                onMouseEnter={e => e.currentTarget.style.background = '#0a1520'}
-                onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
-              >
-                <td style={{ ...TD, color: '#ccc', maxWidth: '200px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{key}</td>
-                <td style={{ ...TD, textAlign: 'right', color: '#fff' }}>{row.total.toLocaleString()}</td>
-                <td style={{ ...TD, textAlign: 'right', color: '#00e676' }}>{row.certified.toLocaleString()}</td>
-                <td style={{ ...TD, textAlign: 'right', color: '#666' }}>{row.analyst_review.toLocaleString()}</td>
-                <td style={{ ...TD, textAlign: 'right', color: '#ff9800' }}>{rowOther(row).toLocaleString()}</td>
-                <td style={{ ...TD, textAlign: 'right', color: ACCENT, fontWeight: 600 }}>{pctRemaining(row)}</td>
-                <td style={{ ...TD }}><Bar row={row} /></td>
-              </tr>
-            ))}
+            {display.map(([key, row]) => {
+              const prevRow = prevMap?.get(key)
+              const delta = prevRow != null ? row.certified - prevRow.certified : null
+              return (
+                <tr key={key}
+                  style={{ background: 'transparent', transition: 'background 0.1s' }}
+                  onMouseEnter={e => e.currentTarget.style.background = '#0a1520'}
+                  onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
+                >
+                  <td style={{ ...TD, color: '#ccc', maxWidth: '200px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{key}</td>
+                  <td style={{ ...TD, textAlign: 'right', color: '#fff' }}>{row.total.toLocaleString()}</td>
+                  <td style={{ ...TD, textAlign: 'right', color: '#00e676' }}>{row.certified.toLocaleString()}</td>
+                  {prevMap && <DeltaCell delta={delta} />}
+                  <td style={{ ...TD, textAlign: 'right', color: '#666' }}>{row.analyst_review.toLocaleString()}</td>
+                  <td style={{ ...TD, textAlign: 'right', color: '#ff9800' }}>{rowOther(row).toLocaleString()}</td>
+                  <td style={{ ...TD, textAlign: 'right', color: ACCENT, fontWeight: 600 }}>{pctRemaining(row)}</td>
+                  <td style={{ ...TD }}><Bar row={row} /></td>
+                </tr>
+              )
+            })}
           </tbody>
         </table>
       </div>
@@ -168,8 +181,9 @@ function StatsTable({ title, rows, nameLabel = 'Name', maxRows = null }) {
   )
 }
 
-function OverallTable({ stats }) {
+function OverallTable({ stats, prevOverall = null }) {
   const row = stats.overall
+  const delta = prevOverall != null ? row.certified - prevOverall.certified : null
   return (
     <div style={{ marginBottom: '32px' }}>
       <div style={{ fontSize: '12px', color: ACCENT, letterSpacing: '1.5px', textTransform: 'uppercase', marginBottom: '10px' }}>
@@ -181,6 +195,7 @@ function OverallTable({ stats }) {
             <tr>
               <th style={{ ...TH, textAlign: 'right' }}>Total</th>
               <th style={{ ...TH, textAlign: 'right', color: '#00c47a' }}>Certified</th>
+              {prevOverall && <th style={{ ...TH, textAlign: 'right', color: '#00e676' }}>Δ</th>}
               <th style={{ ...TH, textAlign: 'right' }}>Analyst Review</th>
               <th style={{ ...TH, textAlign: 'right', color: '#ff9800' }}>Other</th>
               <th style={{ ...TH, textAlign: 'right', color: ACCENT }}>% Remaining</th>
@@ -191,6 +206,7 @@ function OverallTable({ stats }) {
             <tr>
               <td style={{ ...TD, textAlign: 'right', color: '#fff', fontSize: '18px', fontWeight: 700 }}>{row.total.toLocaleString()}</td>
               <td style={{ ...TD, textAlign: 'right', color: '#00e676', fontSize: '18px', fontWeight: 700 }}>{row.certified.toLocaleString()}</td>
+              {prevOverall && <DeltaCell delta={delta} />}
               <td style={{ ...TD, textAlign: 'right', color: '#666', fontSize: '18px' }}>{row.analyst_review.toLocaleString()}</td>
               <td style={{ ...TD, textAlign: 'right', color: '#ff9800', fontSize: '18px' }}>{rowOther(row).toLocaleString()}</td>
               <td style={{ ...TD, textAlign: 'right', color: ACCENT, fontSize: '22px', fontWeight: 700 }}>{pctRemaining(row)}</td>
@@ -206,7 +222,9 @@ function OverallTable({ stats }) {
 export default function PermitTracker() {
   const [scanning, setScanning] = useState(false)
   const [scanProgress, setScanProgress] = useState(null)
+  const [scanSummary, setScanSummary] = useState(null)
   const [stats, setStats] = useState(null)
+  const [prevStats, setPrevStats] = useState(null)
   const [scannedAt, setScannedAt] = useState(null)
   const abortRef = useRef(false)
 
@@ -225,6 +243,7 @@ export default function PermitTracker() {
     // Carry forward all previously-resolved cases; only re-query analyst_review ones
     const prevCache = loadCache()
     const prevMap = prevCache?.statusMap ?? {}
+    const prevStatsForDelta = Object.keys(prevMap).length > 0 ? buildStats(prevMap) : null
     const statusMap = { ...prevMap }
 
     const pending = ALL_CASES.map(r => r.c).filter(cn => {
@@ -268,9 +287,17 @@ export default function PermitTracker() {
     await Promise.all(workers)
 
     if (!abortRef.current) {
-      setStats(buildStats(statusMap))
+      const newStats = buildStats(statusMap)
+      const newCertified = newStats.overall.certified - (prevStatsForDelta?.overall.certified ?? 0)
+      setPrevStats(prevStatsForDelta)
+      setStats(newStats)
       setScannedAt(new Date().toISOString())
       saveCache(statusMap)
+      setScanSummary({
+        checked: pending.length,
+        skipped: ALL_CASES.length - pending.length,
+        newCertified: Math.max(0, newCertified),
+      })
     }
     setScanning(false)
   }, [])
@@ -331,6 +358,38 @@ export default function PermitTracker() {
         </div>
       )}
 
+      {scanSummary && !scanning && (
+        <div style={{
+          marginBottom: '20px',
+          padding: '10px 16px',
+          borderRadius: '8px',
+          border: '1px solid #00e67633',
+          background: '#00e67608',
+          fontSize: '12px',
+          color: '#00e676',
+          display: 'flex',
+          flexWrap: 'wrap',
+          gap: '6px',
+          alignItems: 'center',
+        }}>
+          <span>✓ Scan complete</span>
+          <span style={{ color: '#3a5a7a' }}>·</span>
+          <span style={{ color: '#ccc' }}>{scanSummary.checked.toLocaleString()} queried</span>
+          {scanSummary.skipped > 0 && (
+            <>
+              <span style={{ color: '#3a5a7a' }}>·</span>
+              <span style={{ color: '#4a6a8a' }}>{scanSummary.skipped.toLocaleString()} skipped — already resolved (certified / denied / other)</span>
+            </>
+          )}
+          {scanSummary.newCertified > 0 && (
+            <>
+              <span style={{ color: '#3a5a7a' }}>·</span>
+              <span style={{ color: '#00e676', fontWeight: 600 }}>+{scanSummary.newCertified} newly certified</span>
+            </>
+          )}
+        </div>
+      )}
+
       {scannedAt && !scanning && (
         <div style={{ fontSize: '11px', color: '#2a4a6a', marginBottom: '28px' }}>
           Last scanned: {new Date(scannedAt).toLocaleString()} · {ALL_CASES.length.toLocaleString()} cases
@@ -345,10 +404,10 @@ export default function PermitTracker() {
 
       {stats && (
         <>
-          <OverallTable stats={stats} />
-          <StatsTable title="By Filing Date" rows={stats.byDate} nameLabel="Date" />
-          <StatsTable title="By Company" rows={stats.byCompany} nameLabel="Company" maxRows={50} />
-          <StatsTable title="By Employer First Letter" rows={stats.byLetter} nameLabel="Letter" />
+          <OverallTable stats={stats} prevOverall={prevStats?.overall} />
+          <StatsTable title="By Filing Date" rows={stats.byDate} nameLabel="Date" prevRows={prevStats?.byDate} />
+          <StatsTable title="By Company" rows={stats.byCompany} nameLabel="Company" maxRows={50} prevRows={prevStats?.byCompany} />
+          <StatsTable title="By Employer First Letter" rows={stats.byLetter} nameLabel="Letter" prevRows={prevStats?.byLetter} />
         </>
       )}
     </div>
