@@ -23,6 +23,9 @@ function classifyStatus(status) {
   const s = (status || '').toLowerCase()
   if (s.includes('certif')) return 'certified'
   if (s.includes('analyst') || s.includes('under review')) return 'analyst_review'
+  if (s.includes('rfi') || s.includes('request for info') || s.includes('information request')) return 'rfi'
+  if (s.includes('denied') || s.includes('denial')) return 'denied'
+  // withdrawn, on hold, audit, appeal, unknown = other
   return 'other'
 }
 
@@ -40,8 +43,17 @@ function saveCache(statusMap) {
   } catch {}
 }
 
+function emptyRow() {
+  return { certified: 0, analyst_review: 0, rfi: 0, denied: 0, other: 0, total: 0 }
+}
+
+// "Other" display = rfi + denied + other
+// Bar = certified / (certified + analyst_review + rfi + denied)
+function rowOther(r) { return r.rfi + r.denied + r.other }
+function barDenom(r) { return r.certified + r.analyst_review + r.rfi + r.denied }
+
 function buildStats(statusMap) {
-  let certified = 0, analyst_review = 0, other = 0
+  const overall = emptyRow()
   const byDate = {}
   const byCompany = {}
   const byLetter = {}
@@ -50,39 +62,54 @@ function buildStats(statusMap) {
     const status = statusMap[rec.c]
     if (!status) continue
 
-    if (status === 'certified') certified++
-    else if (status === 'analyst_review') analyst_review++
-    else other++
+    const field = ['certified', 'analyst_review', 'rfi', 'denied'].includes(status) ? status : 'other'
+
+    overall[field]++
+    overall.total++
 
     const dt = rec.d || 'unknown'
-    if (!byDate[dt]) byDate[dt] = { certified: 0, analyst_review: 0, other: 0, total: 0 }
+    if (!byDate[dt]) byDate[dt] = emptyRow()
+    byDate[dt][field]++
     byDate[dt].total++
-    byDate[dt][status]++
 
     const emp = rec.e || 'Unknown'
-    if (!byCompany[emp]) byCompany[emp] = { certified: 0, analyst_review: 0, other: 0, total: 0 }
+    if (!byCompany[emp]) byCompany[emp] = emptyRow()
+    byCompany[emp][field]++
     byCompany[emp].total++
-    byCompany[emp][status]++
 
     const letter = (rec.e || 'Unknown').charAt(0).toUpperCase()
     const key = /[A-Z]/.test(letter) ? letter : '#'
-    if (!byLetter[key]) byLetter[key] = { certified: 0, analyst_review: 0, other: 0, total: 0 }
+    if (!byLetter[key]) byLetter[key] = emptyRow()
+    byLetter[key][field]++
     byLetter[key].total++
-    byLetter[key][status]++
   }
 
-  const total = ALL_CASES.length
+  overall.total = ALL_CASES.length
   return {
-    overall: { certified, analyst_review, other, total },
+    overall,
     byDate: Object.entries(byDate).sort((a, b) => a[0].localeCompare(b[0])),
     byCompany: Object.entries(byCompany).sort((a, b) => b[1].total - a[1].total),
     byLetter: Object.entries(byLetter).sort((a, b) => a[0].localeCompare(b[0])),
   }
 }
 
-function pct(row) {
+function pctRemaining(row) {
   if (!row.total) return '—'
-  return Math.round(((row.certified + row.other) / row.total) * 100) + '%'
+  return Math.round((row.analyst_review / row.total) * 100) + '%'
+}
+
+function Bar({ row }) {
+  const denom = barDenom(row)
+  const ratio = denom > 0 ? row.certified / denom : 0
+  const pct = Math.round(ratio * 100)
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: '6px', minWidth: '80px' }}>
+      <div style={{ flex: 1, height: '6px', background: '#0e1a26', borderRadius: '3px', overflow: 'hidden' }}>
+        <div style={{ height: '100%', width: `${pct}%`, background: '#00e676', borderRadius: '3px', transition: 'width 0.3s' }} />
+      </div>
+      <span style={{ fontSize: '11px', color: '#00e676', minWidth: '28px', textAlign: 'right' }}>{pct}%</span>
+    </div>
+  )
 }
 
 const TD = { padding: '8px 14px', borderBottom: '1px solid #0e1a26', fontSize: '12px', fontFamily: "'DM Mono', monospace" }
@@ -106,7 +133,8 @@ function StatsTable({ title, rows, nameLabel = 'Name', maxRows = null }) {
               <th style={{ ...TH, textAlign: 'right', color: '#00c47a' }}>Certified</th>
               <th style={{ ...TH, textAlign: 'right' }}>Analyst Review</th>
               <th style={{ ...TH, textAlign: 'right', color: '#ff9800' }}>Other</th>
-              <th style={{ ...TH, textAlign: 'right', color: ACCENT }}>% Done</th>
+              <th style={{ ...TH, textAlign: 'right', color: ACCENT }}>% Remaining</th>
+              <th style={{ ...TH, textAlign: 'left', color: '#00e676', minWidth: '110px' }}>Certified Rate</th>
             </tr>
           </thead>
           <tbody>
@@ -116,12 +144,13 @@ function StatsTable({ title, rows, nameLabel = 'Name', maxRows = null }) {
                 onMouseEnter={e => e.currentTarget.style.background = '#0a1520'}
                 onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
               >
-                <td style={{ ...TD, color: '#ccc', maxWidth: '240px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{key}</td>
+                <td style={{ ...TD, color: '#ccc', maxWidth: '200px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{key}</td>
                 <td style={{ ...TD, textAlign: 'right', color: '#fff' }}>{row.total.toLocaleString()}</td>
                 <td style={{ ...TD, textAlign: 'right', color: '#00e676' }}>{row.certified.toLocaleString()}</td>
                 <td style={{ ...TD, textAlign: 'right', color: '#666' }}>{row.analyst_review.toLocaleString()}</td>
-                <td style={{ ...TD, textAlign: 'right', color: '#ff9800' }}>{row.other.toLocaleString()}</td>
-                <td style={{ ...TD, textAlign: 'right', color: ACCENT, fontWeight: 600 }}>{pct(row)}</td>
+                <td style={{ ...TD, textAlign: 'right', color: '#ff9800' }}>{rowOther(row).toLocaleString()}</td>
+                <td style={{ ...TD, textAlign: 'right', color: ACCENT, fontWeight: 600 }}>{pctRemaining(row)}</td>
+                <td style={{ ...TD }}><Bar row={row} /></td>
               </tr>
             ))}
           </tbody>
@@ -154,7 +183,8 @@ function OverallTable({ stats }) {
               <th style={{ ...TH, textAlign: 'right', color: '#00c47a' }}>Certified</th>
               <th style={{ ...TH, textAlign: 'right' }}>Analyst Review</th>
               <th style={{ ...TH, textAlign: 'right', color: '#ff9800' }}>Other</th>
-              <th style={{ ...TH, textAlign: 'right', color: ACCENT }}>% Done</th>
+              <th style={{ ...TH, textAlign: 'right', color: ACCENT }}>% Remaining</th>
+              <th style={{ ...TH, textAlign: 'left', color: '#00e676', minWidth: '140px' }}>Certified Rate</th>
             </tr>
           </thead>
           <tbody>
@@ -162,8 +192,9 @@ function OverallTable({ stats }) {
               <td style={{ ...TD, textAlign: 'right', color: '#fff', fontSize: '18px', fontWeight: 700 }}>{row.total.toLocaleString()}</td>
               <td style={{ ...TD, textAlign: 'right', color: '#00e676', fontSize: '18px', fontWeight: 700 }}>{row.certified.toLocaleString()}</td>
               <td style={{ ...TD, textAlign: 'right', color: '#666', fontSize: '18px' }}>{row.analyst_review.toLocaleString()}</td>
-              <td style={{ ...TD, textAlign: 'right', color: '#ff9800', fontSize: '18px' }}>{row.other.toLocaleString()}</td>
-              <td style={{ ...TD, textAlign: 'right', color: ACCENT, fontSize: '22px', fontWeight: 700 }}>{pct(row)}</td>
+              <td style={{ ...TD, textAlign: 'right', color: '#ff9800', fontSize: '18px' }}>{rowOther(row).toLocaleString()}</td>
+              <td style={{ ...TD, textAlign: 'right', color: ACCENT, fontSize: '22px', fontWeight: 700 }}>{pctRemaining(row)}</td>
+              <td style={{ ...TD }}><Bar row={row} /></td>
             </tr>
           </tbody>
         </table>
@@ -214,7 +245,8 @@ export default function PermitTracker() {
           })
           batch.forEach(cn => {
             const rawStatus = foundMap[cn]
-            statusMap[cn] = rawStatus ? classifyStatus(rawStatus) : 'other'
+            // not found in FLAG = still pending
+            statusMap[cn] = rawStatus ? classifyStatus(rawStatus) : 'analyst_review'
           })
         } catch {
           errors++
