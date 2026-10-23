@@ -456,10 +456,13 @@ export default function PermitTracker() {
             New RFIs this scan
           </div>
           {scanSummary.newRFIs.map(r => (
-            <div key={r.c} style={{ display: 'flex', gap: '16px', padding: '5px 0', borderBottom: '1px solid #1a1a0a', fontSize: '12px' }}>
-              <span style={{ color: '#ff9800', fontFamily: "'DM Mono', monospace", minWidth: '140px' }}>{r.c}</span>
-              <span style={{ color: '#ccc', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.e}</span>
-              <span style={{ color: '#3a5a7a', marginLeft: 'auto', flexShrink: 0 }}>{r.d}</span>
+            <div key={r.c} style={{ padding: '7px 0', borderBottom: '1px solid #1a1a0a', fontSize: '12px' }}>
+              <div style={{ display: 'flex', gap: '16px', alignItems: 'baseline' }}>
+                <span style={{ color: '#ff9800', fontFamily: "'DM Mono', monospace", minWidth: '140px', flexShrink: 0 }}>{r.c}</span>
+                <span style={{ color: '#ccc', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.e}</span>
+                <span style={{ color: '#3a5a7a', marginLeft: 'auto', flexShrink: 0 }}>{r.d}</span>
+              </div>
+              {r.j && <div style={{ color: '#4a6a8a', fontSize: '11px', marginTop: '2px', paddingLeft: '0' }}>{r.j}</div>}
             </div>
           ))}
         </div>
