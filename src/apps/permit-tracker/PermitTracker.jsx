@@ -133,10 +133,41 @@ function RemainingBar({ row }) {
   )
 }
 
-function StatsTable({ title, rows, nameLabel = 'Name', maxRows = null, prevRows = null }) {
+function SortTH({ label, col, sortKey, sortDir, onSort, style }) {
+  const active = sortKey === col
+  return (
+    <th onClick={() => onSort(col)} style={{ ...style, cursor: 'pointer', userSelect: 'none' }}>
+      <span style={{ opacity: active ? 1 : 0.7 }}>{label}</span>
+      {active && <span style={{ marginLeft: '4px', fontSize: '9px' }}>{sortDir === 'asc' ? '↑' : '↓'}</span>}
+    </th>
+  )
+}
+
+function StatsTable({ title, rows, nameLabel = 'Name', maxRows = null, prevRows = null, sortable = false }) {
   const [expanded, setExpanded] = useState(false)
-  const display = maxRows && !expanded ? rows.slice(0, maxRows) : rows
+  const [sortKey, setSortKey] = useState('total')
+  const [sortDir, setSortDir] = useState('desc')
   const prevMap = prevRows ? new Map(prevRows) : null
+
+  const handleSort = col => {
+    if (sortKey === col) setSortDir(d => d === 'desc' ? 'asc' : 'desc')
+    else { setSortKey(col); setSortDir('desc') }
+  }
+
+  const sorted = sortable ? [...rows].sort(([ka, ra], [kb, rb]) => {
+    let a, b
+    if (sortKey === 'name') { a = ka; b = kb }
+    else if (sortKey === 'certified') { a = ra.certified; b = rb.certified }
+    else if (sortKey === 'analyst_review') { a = ra.analyst_review; b = rb.analyst_review }
+    else if (sortKey === 'other') { a = rowOther(ra); b = rowOther(rb) }
+    else if (sortKey === 'remaining') { a = ra.total ? ra.analyst_review / ra.total : 0; b = rb.total ? rb.analyst_review / rb.total : 0 }
+    else if (sortKey === 'cert_rate') { a = barDenom(ra) ? ra.certified / barDenom(ra) : 0; b = barDenom(rb) ? rb.certified / barDenom(rb) : 0 }
+    else { a = ra.total; b = rb.total }
+    if (sortKey === 'name') return sortDir === 'asc' ? a.localeCompare(b) : b.localeCompare(a)
+    return sortDir === 'asc' ? a - b : b - a
+  }) : rows
+
+  const display = maxRows && !expanded ? sorted.slice(0, maxRows) : sorted
 
   return (
     <div style={{ marginBottom: '32px' }}>
@@ -147,15 +178,15 @@ function StatsTable({ title, rows, nameLabel = 'Name', maxRows = null, prevRows 
         <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: '480px' }}>
           <thead>
             <tr>
-              <th style={{ ...TH, textAlign: 'left' }}>{nameLabel}</th>
-              <th style={{ ...TH, textAlign: 'right' }}>Total</th>
-              <th style={{ ...TH, textAlign: 'right', color: '#00c47a' }}>Certified</th>
+              <SortTH label={nameLabel} col="name" sortKey={sortKey} sortDir={sortDir} onSort={handleSort} style={{ ...TH, textAlign: 'left' }} />
+              <SortTH label="Total" col="total" sortKey={sortKey} sortDir={sortDir} onSort={handleSort} style={{ ...TH, textAlign: 'right' }} />
+              <SortTH label="Certified" col="certified" sortKey={sortKey} sortDir={sortDir} onSort={handleSort} style={{ ...TH, textAlign: 'right', color: '#00c47a' }} />
               {prevMap && <th style={{ ...TH, textAlign: 'right', color: '#00e676' }}>Δ Cert</th>}
-              <th style={{ ...TH, textAlign: 'right' }}>Analyst Review</th>
-              <th style={{ ...TH, textAlign: 'right', color: '#ff9800' }}>Other</th>
+              <SortTH label="Analyst Review" col="analyst_review" sortKey={sortKey} sortDir={sortDir} onSort={handleSort} style={{ ...TH, textAlign: 'right' }} />
+              <SortTH label="Other" col="other" sortKey={sortKey} sortDir={sortDir} onSort={handleSort} style={{ ...TH, textAlign: 'right', color: '#ff9800' }} />
               {prevMap && <th style={{ ...TH, textAlign: 'right', color: '#ff9800' }}>Δ Other</th>}
-              <th style={{ ...TH, textAlign: 'left', color: ACCENT, minWidth: '110px' }}>% Remaining</th>
-              <th style={{ ...TH, textAlign: 'left', color: '#00e676', minWidth: '110px' }}>Certified Rate</th>
+              <SortTH label="% Remaining" col="remaining" sortKey={sortKey} sortDir={sortDir} onSort={handleSort} style={{ ...TH, textAlign: 'left', color: ACCENT, minWidth: '110px' }} />
+              <SortTH label="Certified Rate" col="cert_rate" sortKey={sortKey} sortDir={sortDir} onSort={handleSort} style={{ ...TH, textAlign: 'left', color: '#00e676', minWidth: '110px' }} />
             </tr>
           </thead>
           <tbody>
@@ -449,9 +480,9 @@ export default function PermitTracker() {
       {stats && (
         <>
           <OverallTable stats={stats} prevOverall={prevStats?.overall} />
-          <StatsTable title="By Filing Date" rows={stats.byDate.filter(([, r]) => r.analyst_review > 0)} nameLabel="Date" prevRows={prevStats?.byDate} />
-          <StatsTable title="By Company" rows={stats.byCompany.filter(([, r]) => r.analyst_review > 0)} nameLabel="Company" maxRows={50} prevRows={prevStats?.byCompany} />
-          <StatsTable title="By Employer First Letter" rows={stats.byLetter.filter(([, r]) => r.analyst_review > 0)} nameLabel="Letter" prevRows={prevStats?.byLetter} />
+          <StatsTable title="By Filing Date" rows={stats.byDate.filter(([, r]) => r.analyst_review > 0)} nameLabel="Date" prevRows={prevStats?.byDate} sortable />
+          <StatsTable title="By Company" rows={stats.byCompany.filter(([, r]) => r.analyst_review > 0)} nameLabel="Company" maxRows={50} prevRows={prevStats?.byCompany} sortable />
+          <StatsTable title="By Employer First Letter" rows={stats.byLetter.filter(([, r]) => r.analyst_review > 0)} nameLabel="Letter" prevRows={prevStats?.byLetter} sortable />
         </>
       )}
     </div>
