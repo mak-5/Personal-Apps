@@ -117,7 +117,7 @@ const TH = { padding: '8px 14px', borderBottom: '1px solid #1a2a3a', fontSize: '
 
 function DeltaCell({ delta, neutral = false }) {
   if (delta == null || delta === 0) return <td style={{ ...TD, textAlign: 'right', color: '#333' }}>—</td>
-  const color = neutral ? '#888' : (delta > 0 ? '#00e676' : '#ff4444')
+  const color = neutral ? '#ff9800' : (delta > 0 ? '#00e676' : '#ff4444')
   return <td style={{ ...TD, textAlign: 'right', color, fontWeight: 600 }}>{delta > 0 ? `+${delta}` : delta}</td>
 }
 
@@ -153,7 +153,7 @@ function StatsTable({ title, rows, nameLabel = 'Name', maxRows = null, prevRows 
               {prevMap && <th style={{ ...TH, textAlign: 'right', color: '#00e676' }}>Δ Cert</th>}
               <th style={{ ...TH, textAlign: 'right' }}>Analyst Review</th>
               <th style={{ ...TH, textAlign: 'right', color: '#ff9800' }}>Other</th>
-              {prevMap && <th style={{ ...TH, textAlign: 'right', color: '#888' }}>Δ Other</th>}
+              {prevMap && <th style={{ ...TH, textAlign: 'right', color: '#ff9800' }}>Δ Other</th>}
               <th style={{ ...TH, textAlign: 'left', color: ACCENT, minWidth: '110px' }}>% Remaining</th>
               <th style={{ ...TH, textAlign: 'left', color: '#00e676', minWidth: '110px' }}>Certified Rate</th>
             </tr>
@@ -214,7 +214,7 @@ function OverallTable({ stats, prevOverall = null }) {
               {prevOverall && <th style={{ ...TH, textAlign: 'right', color: '#00e676' }}>Δ Cert</th>}
               <th style={{ ...TH, textAlign: 'right' }}>Analyst Review</th>
               <th style={{ ...TH, textAlign: 'right', color: '#ff9800' }}>Other</th>
-              {prevOverall && <th style={{ ...TH, textAlign: 'right', color: '#888' }}>Δ Other</th>}
+              {prevOverall && <th style={{ ...TH, textAlign: 'right', color: '#ff9800' }}>Δ Other</th>}
               <th style={{ ...TH, textAlign: 'left', color: ACCENT, minWidth: '140px' }}>% Remaining</th>
               <th style={{ ...TH, textAlign: 'left', color: '#00e676', minWidth: '140px' }}>Certified Rate</th>
             </tr>
