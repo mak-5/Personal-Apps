@@ -307,6 +307,10 @@ export default function PermitTracker() {
     if (!abortRef.current) {
       const newStats = buildStats(statusMap)
       const newCertified = newStats.overall.certified - (prevStatsForDelta?.overall.certified ?? 0)
+      const newRFIs = ALL_CASES.filter(r => {
+        const prev = prevMap[r.c]
+        return (prev === 'analyst_review' || !prev) && statusMap[r.c] === 'rfi'
+      })
       setPrevStats(prevStatsForDelta)
       setStats(newStats)
       setScannedAt(new Date().toISOString())
@@ -315,6 +319,7 @@ export default function PermitTracker() {
         checked: pending.length,
         skipped: ALL_CASES.length - pending.length,
         newCertified: Math.max(0, newCertified),
+        newRFIs,
       })
     }
     setScanning(false)
@@ -405,6 +410,27 @@ export default function PermitTracker() {
               <span style={{ color: '#00e676', fontWeight: 600 }}>+{scanSummary.newCertified} newly certified</span>
             </>
           )}
+          {scanSummary.newRFIs?.length > 0 && (
+            <>
+              <span style={{ color: '#3a5a7a' }}>·</span>
+              <span style={{ color: '#ff9800', fontWeight: 600 }}>⚠ {scanSummary.newRFIs.length} new RFI{scanSummary.newRFIs.length > 1 ? 's' : ''}</span>
+            </>
+          )}
+        </div>
+      )}
+
+      {scanSummary?.newRFIs?.length > 0 && !scanning && (
+        <div style={{ marginBottom: '24px', padding: '12px 16px', borderRadius: '8px', border: '1px solid #ff980033', background: '#ff980008' }}>
+          <div style={{ fontSize: '11px', color: '#ff9800', letterSpacing: '1.5px', textTransform: 'uppercase', marginBottom: '10px' }}>
+            New RFIs this scan
+          </div>
+          {scanSummary.newRFIs.map(r => (
+            <div key={r.c} style={{ display: 'flex', gap: '16px', padding: '5px 0', borderBottom: '1px solid #1a1a0a', fontSize: '12px' }}>
+              <span style={{ color: '#ff9800', fontFamily: "'DM Mono', monospace", minWidth: '140px' }}>{r.c}</span>
+              <span style={{ color: '#ccc', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.e}</span>
+              <span style={{ color: '#3a5a7a', marginLeft: 'auto', flexShrink: 0 }}>{r.d}</span>
+            </div>
+          ))}
         </div>
       )}
 
