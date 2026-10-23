@@ -115,10 +115,22 @@ function Bar({ row }) {
 const TD = { padding: '8px 14px', borderBottom: '1px solid #0e1a26', fontSize: '12px', fontFamily: "'DM Mono', monospace" }
 const TH = { padding: '8px 14px', borderBottom: '1px solid #1a2a3a', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '1.5px', color: '#4a6a8a', fontFamily: "'DM Mono', monospace", background: '#070f18' }
 
-function DeltaCell({ delta }) {
+function DeltaCell({ delta, neutral = false }) {
   if (delta == null || delta === 0) return <td style={{ ...TD, textAlign: 'right', color: '#333' }}>—</td>
-  const color = delta > 0 ? '#00e676' : '#ff4444'
+  const color = neutral ? '#888' : (delta > 0 ? '#00e676' : '#ff4444')
   return <td style={{ ...TD, textAlign: 'right', color, fontWeight: 600 }}>{delta > 0 ? `+${delta}` : delta}</td>
+}
+
+function RemainingBar({ row }) {
+  const pct = row.total > 0 ? Math.round((row.analyst_review / row.total) * 100) : 0
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: '6px', minWidth: '80px' }}>
+      <div style={{ flex: 1, height: '6px', background: '#0e1a26', borderRadius: '3px', overflow: 'hidden' }}>
+        <div style={{ height: '100%', width: `${pct}%`, background: ACCENT, borderRadius: '3px', transition: 'width 0.3s' }} />
+      </div>
+      <span style={{ fontSize: '11px', color: ACCENT, minWidth: '28px', textAlign: 'right' }}>{pct}%</span>
+    </div>
+  )
 }
 
 function StatsTable({ title, rows, nameLabel = 'Name', maxRows = null, prevRows = null }) {
@@ -138,17 +150,19 @@ function StatsTable({ title, rows, nameLabel = 'Name', maxRows = null, prevRows 
               <th style={{ ...TH, textAlign: 'left' }}>{nameLabel}</th>
               <th style={{ ...TH, textAlign: 'right' }}>Total</th>
               <th style={{ ...TH, textAlign: 'right', color: '#00c47a' }}>Certified</th>
-              {prevMap && <th style={{ ...TH, textAlign: 'right', color: '#00e676' }}>Δ</th>}
+              {prevMap && <th style={{ ...TH, textAlign: 'right', color: '#00e676' }}>Δ Cert</th>}
               <th style={{ ...TH, textAlign: 'right' }}>Analyst Review</th>
               <th style={{ ...TH, textAlign: 'right', color: '#ff9800' }}>Other</th>
-              <th style={{ ...TH, textAlign: 'right', color: ACCENT }}>% Remaining</th>
+              {prevMap && <th style={{ ...TH, textAlign: 'right', color: '#888' }}>Δ Other</th>}
+              <th style={{ ...TH, textAlign: 'left', color: ACCENT, minWidth: '110px' }}>% Remaining</th>
               <th style={{ ...TH, textAlign: 'left', color: '#00e676', minWidth: '110px' }}>Certified Rate</th>
             </tr>
           </thead>
           <tbody>
             {display.map(([key, row]) => {
               const prevRow = prevMap?.get(key)
-              const delta = prevRow != null ? row.certified - prevRow.certified : null
+              const deltaCert = prevRow != null ? row.certified - prevRow.certified : null
+              const deltaOther = prevRow != null ? rowOther(row) - rowOther(prevRow) : null
               return (
                 <tr key={key}
                   style={{ background: 'transparent', transition: 'background 0.1s' }}
@@ -158,10 +172,11 @@ function StatsTable({ title, rows, nameLabel = 'Name', maxRows = null, prevRows 
                   <td style={{ ...TD, color: '#ccc', maxWidth: '200px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{key}</td>
                   <td style={{ ...TD, textAlign: 'right', color: '#fff' }}>{row.total.toLocaleString()}</td>
                   <td style={{ ...TD, textAlign: 'right', color: '#00e676' }}>{row.certified.toLocaleString()}</td>
-                  {prevMap && <DeltaCell delta={delta} />}
+                  {prevMap && <DeltaCell delta={deltaCert} />}
                   <td style={{ ...TD, textAlign: 'right', color: '#666' }}>{row.analyst_review.toLocaleString()}</td>
                   <td style={{ ...TD, textAlign: 'right', color: '#ff9800' }}>{rowOther(row).toLocaleString()}</td>
-                  <td style={{ ...TD, textAlign: 'right', color: ACCENT, fontWeight: 600 }}>{pctRemaining(row)}</td>
+                  {prevMap && <DeltaCell delta={deltaOther} neutral />}
+                  <td style={{ ...TD }}><RemainingBar row={row} /></td>
                   <td style={{ ...TD }}><Bar row={row} /></td>
                 </tr>
               )
@@ -183,7 +198,8 @@ function StatsTable({ title, rows, nameLabel = 'Name', maxRows = null, prevRows 
 
 function OverallTable({ stats, prevOverall = null }) {
   const row = stats.overall
-  const delta = prevOverall != null ? row.certified - prevOverall.certified : null
+  const deltaCert = prevOverall != null ? row.certified - prevOverall.certified : null
+  const deltaOther = prevOverall != null ? rowOther(row) - rowOther(prevOverall) : null
   return (
     <div style={{ marginBottom: '32px' }}>
       <div style={{ fontSize: '12px', color: ACCENT, letterSpacing: '1.5px', textTransform: 'uppercase', marginBottom: '10px' }}>
@@ -195,10 +211,11 @@ function OverallTable({ stats, prevOverall = null }) {
             <tr>
               <th style={{ ...TH, textAlign: 'right' }}>Total</th>
               <th style={{ ...TH, textAlign: 'right', color: '#00c47a' }}>Certified</th>
-              {prevOverall && <th style={{ ...TH, textAlign: 'right', color: '#00e676' }}>Δ</th>}
+              {prevOverall && <th style={{ ...TH, textAlign: 'right', color: '#00e676' }}>Δ Cert</th>}
               <th style={{ ...TH, textAlign: 'right' }}>Analyst Review</th>
               <th style={{ ...TH, textAlign: 'right', color: '#ff9800' }}>Other</th>
-              <th style={{ ...TH, textAlign: 'right', color: ACCENT }}>% Remaining</th>
+              {prevOverall && <th style={{ ...TH, textAlign: 'right', color: '#888' }}>Δ Other</th>}
+              <th style={{ ...TH, textAlign: 'left', color: ACCENT, minWidth: '140px' }}>% Remaining</th>
               <th style={{ ...TH, textAlign: 'left', color: '#00e676', minWidth: '140px' }}>Certified Rate</th>
             </tr>
           </thead>
@@ -206,10 +223,11 @@ function OverallTable({ stats, prevOverall = null }) {
             <tr>
               <td style={{ ...TD, textAlign: 'right', color: '#fff', fontSize: '18px', fontWeight: 700 }}>{row.total.toLocaleString()}</td>
               <td style={{ ...TD, textAlign: 'right', color: '#00e676', fontSize: '18px', fontWeight: 700 }}>{row.certified.toLocaleString()}</td>
-              {prevOverall && <DeltaCell delta={delta} />}
+              {prevOverall && <DeltaCell delta={deltaCert} />}
               <td style={{ ...TD, textAlign: 'right', color: '#666', fontSize: '18px' }}>{row.analyst_review.toLocaleString()}</td>
               <td style={{ ...TD, textAlign: 'right', color: '#ff9800', fontSize: '18px' }}>{rowOther(row).toLocaleString()}</td>
-              <td style={{ ...TD, textAlign: 'right', color: ACCENT, fontSize: '22px', fontWeight: 700 }}>{pctRemaining(row)}</td>
+              {prevOverall && <DeltaCell delta={deltaOther} neutral />}
+              <td style={{ ...TD }}><RemainingBar row={row} /></td>
               <td style={{ ...TD }}><Bar row={row} /></td>
             </tr>
           </tbody>
@@ -405,9 +423,9 @@ export default function PermitTracker() {
       {stats && (
         <>
           <OverallTable stats={stats} prevOverall={prevStats?.overall} />
-          <StatsTable title="By Filing Date" rows={stats.byDate} nameLabel="Date" prevRows={prevStats?.byDate} />
-          <StatsTable title="By Company" rows={stats.byCompany} nameLabel="Company" maxRows={50} prevRows={prevStats?.byCompany} />
-          <StatsTable title="By Employer First Letter" rows={stats.byLetter} nameLabel="Letter" prevRows={prevStats?.byLetter} />
+          <StatsTable title="By Filing Date" rows={stats.byDate.filter(([, r]) => r.analyst_review > 0)} nameLabel="Date" prevRows={prevStats?.byDate} />
+          <StatsTable title="By Company" rows={stats.byCompany.filter(([, r]) => r.analyst_review > 0)} nameLabel="Company" maxRows={50} prevRows={prevStats?.byCompany} />
+          <StatsTable title="By Employer First Letter" rows={stats.byLetter.filter(([, r]) => r.analyst_review > 0)} nameLabel="Letter" prevRows={prevStats?.byLetter} />
         </>
       )}
     </div>
